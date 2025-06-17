@@ -20,8 +20,9 @@ from io import BytesIO
 # >>>>>>>>>>>>>>>>>>>>>>>  EDIT THIS  <<<<<<<<<<<<<<<<<<<<<<<<<
 INPUT_DIR = r"C:\Users\azhme\OneDrive - Clear Creek ISD\Files\Other Folders\Books\Attack On Titan Manga\CBZ"
 BATCH_SIZE = 5  # Process images in batches to manage memory
-MAX_IMAGE_SIZE = (2048, 2048)  # Resize large images to save memory
-JPEG_QUALITY = 85  # PDF compression quality
+MAX_IMAGE_SIZE = (1200, 1600)  # Smaller max size for manga pages
+JPEG_QUALITY = 60  # Lower quality for smaller file size
+TARGET_DPI = 100  # Lower DPI for smaller files
 # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 # ----------------------------------------------------------------
@@ -31,19 +32,24 @@ def _natural_key(text: str):
     return [int(tok) if tok.isdigit() else tok.lower() for tok in re.split(r"(\d+)", text)]
 
 def optimize_image(img: Image.Image) -> Image.Image:
-    """Optimize image for PDF conversion to reduce memory usage."""
-    # Resize if too large
+    """Optimize image for PDF conversion to reduce file size significantly."""
+    # More aggressive resizing for manga
     if img.size[0] > MAX_IMAGE_SIZE[0] or img.size[1] > MAX_IMAGE_SIZE[1]:
         img.thumbnail(MAX_IMAGE_SIZE, Image.Resampling.LANCZOS)
     
     # Convert to RGB if needed
     if img.mode in ("P", "RGBA"):
         img = img.convert("RGB")
+    elif img.mode == "L":
+        # Keep grayscale for smaller file size if it's already grayscale
+        pass
+    else:
+        img = img.convert("RGB")
     
     return img
 
 def cbz_to_pdf(cbz_path: Path, out_dir: Path):
-    """Memory efficient CBZ to PDF conversion."""
+    """Memory efficient CBZ to PDF conversion with aggressive compression."""
     try:
         with zipfile.ZipFile(cbz_path, 'r') as zf:
             images = [n for n in zf.namelist() if n.lower().endswith((
@@ -87,17 +93,30 @@ def cbz_to_pdf(cbz_path: Path, out_dir: Path):
                 print(f"[SKIP] {cbz_path.name}: no valid images processed")
                 return
 
-            # Save PDF with optimizations
-            all_pages[0].save(
-                pdf_path, 
-                "PDF", 
-                save_all=True, 
-                append_images=all_pages[1:],
-                optimize=True,
-                quality=JPEG_QUALITY,
-                resolution=150.0
-            )
-            print(f"[OK]  {pdf_path.name} ({len(all_pages)} pages)")
+            # Save PDF with aggressive compression
+            save_kwargs = {
+                "format": "PDF",
+                "save_all": True,
+                "append_images": all_pages[1:] if len(all_pages) > 1 else [],
+                "optimize": True,
+                "quality": JPEG_QUALITY,
+                "resolution": TARGET_DPI,
+                "compress_level": 9  # Maximum compression
+            }
+            
+            # For very large PDFs, try additional compression
+            if len(all_pages) > 50:  # Assume large file if many pages
+                save_kwargs["quality"] = 50  # Even lower quality for large files
+                save_kwargs["resolution"] = 90
+                
+            all_pages[0].save(pdf_path, **save_kwargs)
+            
+            # Check file size and warn if still large
+            file_size_mb = pdf_path.stat().st_size / (1024 * 1024)
+            if file_size_mb > 100:
+                print(f"[WARN] {pdf_path.name} is {file_size_mb:.1f}MB (target: <100MB)")
+            else:
+                print(f"[OK]  {pdf_path.name} ({len(all_pages)} pages, {file_size_mb:.1f}MB)")
             
     except Exception as e:
         print(f"[ERROR] Failed to process {cbz_path.name}: {e}")
